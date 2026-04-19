@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from "express";
 import { checkDbHealth } from "./db/connection";
+import { getLLMProvider } from "./llm";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
@@ -14,17 +15,24 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/health", async (_req, res) => {
+  let llmOk = false;
+  try {
+    llmOk = await getLLMProvider().checkHealth();
+  } catch {
+    // Provider not configured — treated as unavailable
+  }
+
   const dbOk = await checkDbHealth();
+  const allOk = dbOk && llmOk;
+  const status = allOk ? "OK" : "DEGRADED";
 
-  const status = dbOk ? "OK" : "DEGRADED";
-
-  res.status(dbOk ? 200 : 503).json({
+  res.status(allOk ? 200 : 503).json({
     status,
     version: "1.0.0",
     uptime: Math.floor(process.uptime()),
     dependencies: {
       database: dbOk ? "OK" : "UNAVAILABLE",
-      llmProvider: "OK",
+      llmProvider: llmOk ? "OK" : "UNAVAILABLE",
       queue: "OK",
     },
     timestamp: new Date().toISOString(),
