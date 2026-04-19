@@ -4,6 +4,8 @@ dotenv.config();
 import express from "express";
 import { checkDbHealth } from "./db/connection";
 import { getLLMProvider } from "./llm";
+import extractRouter from "./routes/extract";
+import { errorHandler } from "./middleware/error-handler";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
@@ -38,6 +40,12 @@ app.get("/api/health", async (_req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// ── Routes ──────────────────────────────────────────────────
+app.use("/api/extract", extractRouter);
+
+// ── Global error handler ────────────────────────────────────
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

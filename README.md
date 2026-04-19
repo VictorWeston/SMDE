@@ -20,6 +20,34 @@ npm install && npm run dev     # start the server
 
 See `.env.example` for all required variables.
 
+### Changing the LLM Provider
+
+To switch LLM providers, update three environment variables in `.env` — no code changes required:
+
+```env
+# Gemini (default)
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-2.0-flash
+LLM_API_KEY=your_gemini_key
+
+# Anthropic
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-haiku-4-5-20251001
+LLM_API_KEY=your_anthropic_key
+
+# OpenAI
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+LLM_API_KEY=your_openai_key
+
+# Groq
+LLM_PROVIDER=groq
+LLM_MODEL=llama-3.2-11b-vision-preview
+LLM_API_KEY=your_groq_key
+```
+
+Restart the server after changing. The `/api/health` endpoint will confirm the new provider is connected.
+
 ## API Endpoints
 
 ### `GET /api/health`
@@ -47,11 +75,95 @@ curl http://localhost:3000/api/health
 
 ---
 
+### `POST /api/extract`
+
+Upload a maritime document for LLM-powered data extraction. Supports sync (default) and async modes.
+
+**Request** — `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `document` | File | Yes | JPEG, PNG, or PDF (max 10MB) |
+| `sessionId` | String | No | UUID to group documents. Auto-created if omitted. |
+
+**Query params:**
+- `mode=sync` (default) — blocks until extraction completes, returns full result
+- `mode=async` — returns immediately with a `jobId` for polling
+
+**Sync response `200 OK`**
+```json
+{
+  "extractionId": "069f0c19-...",
+  "sessionId": "a59002e4-...",
+  "status": "COMPLETE",
+  "processingTimeMs": 12957,
+  "data": {
+    "detection": { "documentType": "COC", "confidence": "HIGH", "..." : "..." },
+    "holder": { "fullName": "John Doe", "..." : "..." },
+    "fields": [ { "key": "certificate_number", "value": "12345", "..." : "..." } ],
+    "validity": { "dateOfExpiry": "15/06/2027", "isExpired": false, "..." : "..." },
+    "compliance": { "issuingAuthority": "MARINA", "..." : "..." },
+    "medicalData": { "fitnessResult": "N/A", "..." : "..." },
+    "flags": [],
+    "summary": "..."
+  }
+}
+```
+
+**Async response `202 Accepted`**
+```json
+{
+  "jobId": "10364003-...",
+  "sessionId": "88b2dc6d-...",
+  "status": "QUEUED",
+  "pollUrl": "/api/jobs/10364003-..."
+}
+```
+
+**Deduplicated response `200 OK`** (same file + same session — skips LLM)
+```
+X-Deduplicated: true
+```
+```json
+{
+  "extractionId": "069f0c19-...",
+  "sessionId": "a59002e4-...",
+  "deduplicated": true,
+  "status": "COMPLETE"
+}
+```
+
+**Error responses:**
+
+| Code | Error | Condition |
+|---|---|---|
+| 400 | `MISSING_FILE` | No file in request |
+| 400 | `UNSUPPORTED_FORMAT` | Not JPEG/PNG/PDF |
+| 413 | `FILE_TOO_LARGE` | Exceeds 10MB |
+| 422 | `LLM_ERROR` / `LLM_TIMEOUT` | Extraction failed |
+| 429 | `RATE_LIMITED` | More than 10 requests/min from same IP |
+
+```bash
+# Sync extraction
+curl -X POST http://localhost:3000/api/extract \
+  -F "document=@seafarer_coc.jpg;type=image/jpeg"
+
+# With session ID
+curl -X POST http://localhost:3000/api/extract \
+  -F "document=@passport.png;type=image/png" \
+  -F "sessionId=a59002e4-5dc5-44b0-84d7-4185612f9d38"
+
+# Async mode
+curl -X POST "http://localhost:3000/api/extract?mode=async" \
+  -F "document=@medical_cert.pdf;type=application/pdf"
+```
+
+---
+
 *Remaining endpoints — implementation in progress:*
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `POST /api/extract` | POST | Upload & extract document via LLM (sync/async) |
 | `GET /api/jobs/:jobId` | GET | Poll async extraction job status |
 | `GET /api/sessions/:sessionId` | GET | List all extractions in a session |
 | `POST /api/sessions/:sessionId/validate` | POST | Cross-document compliance validation |
