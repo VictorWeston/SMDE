@@ -1,0 +1,448 @@
+{
+  "info": {
+    "_postman_id": "smde-api-collection",
+    "name": "SMDE API",
+    "description": "Smart Maritime Document Extractor — full endpoint collection.\n\nSet the `baseUrl` variable (default: http://localhost:3000) before running.\n\nWorkflow: Health → Extract (sync) → Extract (async) → Poll Job → Get Session → Validate → Report",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "extractionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "health"]
+        },
+        "description": "Returns service health including database, LLM provider, and queue status."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Status is OK', () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.status).to.eql('OK');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Extract — Sync Mode",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/extract?mode=sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "extract"],
+          "query": [
+            {
+              "key": "mode",
+              "value": "sync"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "document",
+              "type": "file",
+              "src": "",
+              "description": "Select a JPEG, PNG, or PDF maritime document (max 10 MB)"
+            },
+            {
+              "key": "sessionId",
+              "value": "{{sessionId}}",
+              "description": "Optional — leave blank to auto-create a session",
+              "type": "text"
+            }
+          ]
+        },
+        "description": "Upload a document and wait for extraction to complete. Returns full structured result."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "if (body.sessionId) pm.collectionVariables.set('sessionId', body.sessionId);",
+              "if (body.extractionId) pm.collectionVariables.set('extractionId', body.extractionId);",
+              "pm.test('Has extractionId', () => pm.expect(body.extractionId).to.be.a('string'));",
+              "pm.test('Status is COMPLETE', () => pm.expect(body.status).to.eql('COMPLETE'));",
+              "pm.test('Has data object', () => pm.expect(body.data).to.be.an('object'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Extract — Async Mode",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/extract?mode=async",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "extract"],
+          "query": [
+            {
+              "key": "mode",
+              "value": "async"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "document",
+              "type": "file",
+              "src": "",
+              "description": "Select a JPEG, PNG, or PDF maritime document (max 10 MB)"
+            },
+            {
+              "key": "sessionId",
+              "value": "{{sessionId}}",
+              "description": "Optional — re-use session from sync request",
+              "type": "text"
+            }
+          ]
+        },
+        "description": "Upload a document asynchronously. Returns a jobId for polling."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202', () => pm.response.to.have.status(202));",
+              "const body = pm.response.json();",
+              "if (body.jobId) pm.collectionVariables.set('jobId', body.jobId);",
+              "if (body.sessionId) pm.collectionVariables.set('sessionId', body.sessionId);",
+              "pm.test('Has jobId', () => pm.expect(body.jobId).to.be.a('string'));",
+              "pm.test('Has pollUrl', () => pm.expect(body.pollUrl).to.be.a('string'));",
+              "pm.test('Status is QUEUED', () => pm.expect(body.status).to.eql('QUEUED'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Extract — Missing File (400)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/extract?mode=sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "extract"],
+          "query": [
+            {
+              "key": "mode",
+              "value": "sync"
+            }
+          ]
+        },
+        "description": "Negative test: no file attached. Expects 400 MISSING_FILE."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+              "pm.test('Error is MISSING_FILE', () => {",
+              "  pm.expect(pm.response.json().error).to.eql('MISSING_FILE');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Poll Job Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/jobs/{{jobId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "jobs", "{{jobId}}"]
+        },
+        "description": "Poll the status of an async extraction job. Run after 'Extract — Async Mode'."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has job status', () => {",
+              "  pm.expect(['QUEUED','PROCESSING','COMPLETE','FAILED']).to.include(body.status);",
+              "});",
+              "if (body.status === 'COMPLETE' && body.extractionId) {",
+              "  pm.collectionVariables.set('extractionId', body.extractionId);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Poll Job — Not Found (404)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/jobs/00000000-0000-0000-0000-000000000000",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "jobs", "00000000-0000-0000-0000-000000000000"]
+        },
+        "description": "Negative test: non-existent job ID."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+              "pm.test('Error is JOB_NOT_FOUND', () => {",
+              "  pm.expect(pm.response.json().error).to.eql('JOB_NOT_FOUND');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Session",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "{{sessionId}}"]
+        },
+        "description": "List all documents in a session with health status."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has sessionId', () => pm.expect(body.sessionId).to.be.a('string'));",
+              "pm.test('Has documents array', () => pm.expect(body.documents).to.be.an('array'));",
+              "pm.test('Has documentCount', () => pm.expect(body.documentCount).to.be.a('number'));",
+              "pm.test('Has overallHealth', () => {",
+              "  pm.expect(['OK','WARN','CRITICAL']).to.include(body.overallHealth);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Session — Not Found (404)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/00000000-0000-0000-0000-000000000000",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "00000000-0000-0000-0000-000000000000"]
+        },
+        "description": "Negative test: non-existent session."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+              "pm.test('Error is SESSION_NOT_FOUND', () => {",
+              "  pm.expect(pm.response.json().error).to.eql('SESSION_NOT_FOUND');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validate Session",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/validate",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "{{sessionId}}", "validate"]
+        },
+        "description": "Cross-document compliance validation via LLM. Requires at least 2 completed extractions in the session."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has validationId', () => pm.expect(body.validationId).to.be.a('string'));",
+              "pm.test('Has overallStatus', () => {",
+              "  pm.expect(['APPROVED','CONDITIONAL','REJECTED']).to.include(body.overallStatus);",
+              "});",
+              "pm.test('Has overallScore', () => pm.expect(body.overallScore).to.be.a('number'));",
+              "pm.test('Has consistencyChecks', () => pm.expect(body.consistencyChecks).to.be.an('array'));",
+              "pm.test('Has missingDocuments', () => pm.expect(body.missingDocuments).to.be.an('array'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validate — Insufficient Documents (400)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/validate",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "{{sessionId}}", "validate"]
+        },
+        "description": "Negative test: session with fewer than 2 completed extractions. Use a session with only 1 document."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+              "pm.test('Error is INSUFFICIENT_DOCUMENTS', () => {",
+              "  pm.expect(pm.response.json().error).to.eql('INSUFFICIENT_DOCUMENTS');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Compliance Report",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/report",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "{{sessionId}}", "report"]
+        },
+        "description": "Structured compliance report — no LLM call, pure DB aggregation."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has sessionId', () => pm.expect(body.sessionId).to.be.a('string'));",
+              "pm.test('Has seafarer', () => pm.expect(body.seafarer).to.be.an('object'));",
+              "pm.test('Has documentInventory', () => pm.expect(body.documentInventory).to.be.an('object'));",
+              "pm.test('Has expiryTimeline', () => pm.expect(body.expiryTimeline).to.be.an('array'));",
+              "pm.test('Has flagSummary', () => pm.expect(body.flagSummary).to.be.an('object'));",
+              "pm.test('Has medicalStatus', () => pm.expect(body.medicalStatus).to.be.an('object'));",
+              "pm.test('Has complianceReadiness', () => pm.expect(body.complianceReadiness).to.be.an('object'));",
+              "pm.test('complianceReadiness has blockers', () => {",
+              "  pm.expect(body.complianceReadiness.blockers).to.be.an('array');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Report — Not Found (404)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/00000000-0000-0000-0000-000000000000/report",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "00000000-0000-0000-0000-000000000000", "report"]
+        },
+        "description": "Negative test: report for non-existent session."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+              "pm.test('Error is SESSION_NOT_FOUND', () => {",
+              "  pm.expect(pm.response.json().error).to.eql('SESSION_NOT_FOUND');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}

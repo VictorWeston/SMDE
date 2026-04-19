@@ -420,3 +420,47 @@ Cross-document compliance results. `overall_status` and `overall_score` promoted
 
 **Indexes:**
 - `(session_id, created_at DESC)` — get latest validation for a session
+
+---
+
+## Testing
+
+### Unit Tests
+
+JSON extraction and repair logic is covered by Jest unit tests:
+
+```bash
+npm test
+```
+
+Tests cover:
+- `extractJsonFromText` — markdown fence stripping, preamble/trailing removal, nested braces, error cases
+- `parseExtractionResponse` — end-to-end parse from LLM output to typed result
+- `buildRepairPrompt` — repair prompt content validation
+- `buildLowConfidenceRetryPrompt` — retry prompt includes file context and confidence reference
+
+### Postman Collection
+
+A full Postman collection is included at [`postman/SMDE-API.postman_collection.json`](postman/SMDE-API.postman_collection.json).
+
+**Import:** File → Import → select the JSON file.
+
+**Setup:** Set the `baseUrl` collection variable (default: `http://localhost:3000`).
+
+**Included requests:**
+| Request | Method | Tests |
+|---|---|---|
+| Health Check | GET | Status 200, `status: "OK"` |
+| Extract — Sync | POST | 200, has `extractionId`, status COMPLETE, has `data` |
+| Extract — Async | POST | 202, has `jobId` + `pollUrl`, status QUEUED |
+| Extract — Missing File | POST | 400, `MISSING_FILE` |
+| Poll Job Status | GET | 200, valid status enum |
+| Poll Job — Not Found | GET | 404, `JOB_NOT_FOUND` |
+| Get Session | GET | 200, has documents array + health |
+| Get Session — Not Found | GET | 404, `SESSION_NOT_FOUND` |
+| Validate Session | POST | 200, has `overallStatus` + `overallScore` |
+| Validate — Insufficient | POST | 400, `INSUFFICIENT_DOCUMENTS` |
+| Get Compliance Report | GET | 200, full report shape |
+| Report — Not Found | GET | 404, `SESSION_NOT_FOUND` |
+
+Collection variables (`sessionId`, `jobId`, `extractionId`) are auto-populated from response data, so you can run requests in order without manual copy-paste.

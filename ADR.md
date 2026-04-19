@@ -169,3 +169,29 @@ If the product needed search across extracted field values (e.g., "find all docu
 **At large scale (> 1M rows, frequent search):** I'd normalize `fields_json` into a child table `extraction_fields(extraction_id, key, label, value, importance, status)` with a GIN trigram index (`pg_trgm`) on the `value` column. This makes substring search, ILIKE, and similarity queries fast, and eliminates the need to parse JSONB at query time. The tradeoff is write amplification — every extraction fans out into N child rows — but reads dominate this workload.
 
 I chose not to implement the child table now because the current query patterns don't require it, and the normalization adds write complexity that isn't justified until full-text search is an actual product requirement.
+
+---
+
+## Question 5 — What You Skipped
+
+Here are the things I deliberately did not implement that a production deployment would require. Each was a conscious tradeoff — I chose to spend time on a robust core pipeline instead of spreading thin across features that can be layered on later.
+
+### 1. Authentication and Authorization
+
+There is no auth layer at all. Every endpoint is publicly accessible. In production, this API would sit behind an API gateway or have JWT-based auth middleware that verifies the caller is a legitimate Manning Agent user. Role-based access control matters here too — a compliance officer should be able to view reports and trigger validations, but only an admin should be able to delete sessions or modify configuration. I skipped it because auth is largely orthogonal to the extraction pipeline — adding it later doesn't require restructuring any route logic, just wrapping routes in middleware. For an assessment focused on LLM reliability and async architecture, it was the right thing to cut.
+
+### 2. Webhook Notifications for Async Jobs
+
+The async flow currently requires polling (`GET /api/jobs/:jobId`). In production, callers should be able to supply a `webhookUrl` on the extract request and receive an HMAC-signed POST when the job completes or fails. This eliminates polling entirely and integrates cleanly with event-driven frontends or third-party systems. The implementation is straightforward — store the URL in the jobs table, fire the webhook from the BullMQ `completed`/`failed` event handlers, sign the payload with a shared secret, and implement retry with backoff for failed deliveries. I deprioritized it because the polling endpoint is functional and demonstrates the async pattern; webhooks are a delivery optimization, not a correctness concern.
+
+### 3. File Storage and Cleanup
+
+Uploaded files are currently stored as `BYTEA` in the jobs table for async processing, then cleared after the worker finishes. The raw file bytes are not persisted anywhere long-term. In production, I would store originals in object storage (S3, GCS, or MinIO) with a reference in the database. This supports audit trails (regulators may require the original scan), re-extraction when prompts improve, and keeps the database lean. I also have no scheduled cleanup for old sessions, completed jobs, or orphaned files — a production system would need a retention policy (e.g., 90-day TTL on raw files, permanent retention on extracted data) enforced by a cron job or database-level partitioning. I skipped both because they're infrastructure concerns that don't affect the core extraction or validation logic being evaluated.
+
+### 4. Comprehensive Error Recovery and Observability
+
+The current error handling catches LLM failures and returns appropriate HTTP codes, but it doesn't do structured logging (just `console.error`), doesn't emit metrics (extraction latency P50/P95, LLM error rate, queue depth), and doesn't integrate with an alerting system. In production I would add OpenTelemetry traces through the full pipeline (upload → queue → LLM call → parse → store), ship logs to a centralized system (ELK or Datadog), and set up alerts on queue backup (> 100 pending jobs), LLM error rate (> 10% in 5 minutes), and extraction latency spikes. There's also no circuit breaker on the LLM provider — if Gemini starts returning 500s, we keep sending requests until max retries instead of failing fast. I skipped this because observability tooling is high-value in production but doesn't demonstrate architectural judgment in an assessment context.
+
+### 5. Multi-tenant Isolation and Data Encryption
+
+The system treats all data as belonging to a single implicit tenant. In production with multiple Manning Agencies, sessions need tenant scoping — every query would include a `tenant_id` filter, and cross-tenant data access must be impossible. PII fields (names, passport numbers, medical results) should be encrypted at rest using column-level encryption or a KMS-backed envelope encryption scheme. The current design stores them as plaintext in PostgreSQL. I skipped multi-tenancy because it's a horizontal concern that touches every query, and encryption because it requires key management infrastructure that would distract from the core pipeline implementation.
