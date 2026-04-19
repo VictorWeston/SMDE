@@ -160,14 +160,197 @@ curl -X POST "http://localhost:3000/api/extract?mode=async" \
 
 ---
 
-*Remaining endpoints — implementation in progress:*
+### `GET /api/jobs/:jobId`
 
-| Endpoint | Method | Description |
+Poll the status and result of an async extraction job.
+
+**States:**
+
+| Status | Payload | Description |
 |---|---|---|
-| `GET /api/jobs/:jobId` | GET | Poll async extraction job status |
-| `GET /api/sessions/:sessionId` | GET | List all extractions in a session |
-| `POST /api/sessions/:sessionId/validate` | POST | Cross-document compliance validation |
-| `GET /api/sessions/:sessionId/report` | GET | Structured compliance report |
+| `QUEUED` | `queuePosition` | Waiting in queue |
+| `PROCESSING` | `startedAt`, `estimatedCompleteMs` | LLM extraction in progress |
+| `COMPLETE` | `extractionId`, `result`, `completedAt` | Full extraction result included |
+| `FAILED` | `error`, `message`, `retryable`, `failedAt` | Extraction failed |
+
+**Response `200 OK`** (COMPLETE example)
+```json
+{
+  "jobId": "5d427818-...",
+  "sessionId": "1670eb0d-...",
+  "status": "COMPLETE",
+  "extractionId": "6a0e358d-...",
+  "result": {
+    "documentType": "COC",
+    "holderName": "Juan Dela Cruz",
+    "..."
+  },
+  "completedAt": "2026-04-19T17:25:34.886Z"
+}
+```
+
+**Error `404`** — `JOB_NOT_FOUND`
+
+```bash
+curl http://localhost:3000/api/jobs/5d427818-62af-4cdd-b884-27d4627c89d6
+```
+
+---
+
+### `GET /api/sessions/:sessionId`
+
+Returns all documents in a session with health status and pending jobs.
+
+**Response `200 OK`**
+```json
+{
+  "sessionId": "b6a3fe00-...",
+  "documentCount": 5,
+  "detectedRole": "DECK",
+  "overallHealth": "WARN",
+  "documents": [
+    {
+      "id": "069f0c19-...",
+      "fileName": "coc.jpg",
+      "documentType": "COC",
+      "holderName": "Juan Dela Cruz",
+      "confidence": "HIGH",
+      "isExpired": false,
+      "flagCount": 0,
+      "criticalFlagCount": 0,
+      "createdAt": "2026-04-19T08:30:00Z"
+    }
+  ],
+  "pendingJobs": []
+}
+```
+
+`overallHealth` is derived from session data:
+- **OK** — no expired certs, no CRITICAL flags
+- **WARN** — certs expiring within 90 days or MEDIUM/HIGH flags
+- **CRITICAL** — expired required certs or CRITICAL flags
+
+**Error `404`** — `SESSION_NOT_FOUND`
+
+```bash
+curl http://localhost:3000/api/sessions/b6a3fe00-37b6-483c-a111-3eacaa48c983
+```
+
+---
+
+### `POST /api/sessions/:sessionId/validate`
+
+Cross-document compliance validation. Sends all extraction records to the LLM with a structured prompt that checks identity consistency, missing documents, expiring certs, medical fitness, and overall deployment readiness.
+
+Requires at least 2 completed documents in the session.
+
+**Response `200 OK`**
+```json
+{
+  "sessionId": "b6a3fe00-...",
+  "validationId": "8c7be816-...",
+  "holderProfile": {
+    "fullName": "Juan Dela Cruz",
+    "detectedRole": "DECK",
+    "..."
+  },
+  "consistencyChecks": [
+    { "field": "fullName", "status": "CONSISTENT", "..." }
+  ],
+  "missingDocuments": [
+    { "documentType": "BRM_SSBT", "impact": "HIGH", "..." }
+  ],
+  "expiringDocuments": [
+    { "documentType": "PEME", "daysUntilExpiry": 45, "urgency": "WARNING", "..." }
+  ],
+  "medicalFlags": [
+    { "type": "FITNESS", "status": "PASS", "..." }
+  ],
+  "overallStatus": "CONDITIONAL",
+  "overallScore": 74,
+  "summary": "Seafarer is conditionally deployable...",
+  "recommendations": ["Renew PEME before deployment — expires in 45 days"],
+  "processingTimeMs": 14079,
+  "validatedAt": "2026-04-19T20:17:24.657Z"
+}
+```
+
+**Scoring:** Starts at 100, deductions for missing/expired documents, flags, and identity mismatches. Medical UNFIT or positive drug test = automatic 0. Status thresholds: APPROVED >= 80, CONDITIONAL 50-79, REJECTED < 50.
+
+**Error responses:**
+
+| Code | Error | Condition |
+|---|---|---|
+| 400 | `INSUFFICIENT_DOCUMENTS` | Fewer than 2 completed extractions |
+| 404 | `SESSION_NOT_FOUND` | Invalid session ID |
+| 502 | `LLM_ERROR` | LLM provider failed |
+
+```bash
+curl -X POST http://localhost:3000/api/sessions/b6a3fe00-37b6-483c-a111-3eacaa48c983/validate
+```
+
+---
+
+### `GET /api/sessions/:sessionId/report`
+
+Structured compliance report derived entirely from database data — no LLM call. Designed for Manning Agent hire/no-hire decisions.
+
+**Response `200 OK`**
+```json
+{
+  "sessionId": "b6a3fe00-...",
+  "generatedAt": "2026-04-19T20:26:09.597Z",
+  "seafarer": {
+    "fullName": "Juan Dela Cruz",
+    "nationality": "Filipino",
+    "passportNumber": "P1234567",
+    "sirbNumber": "SIRB-2024-001",
+    "rank": "Second Officer"
+  },
+  "detectedRole": "DECK",
+  "documentInventory": {
+    "total": 10,
+    "present": [{ "documentType": "COC", "status": "PRESENT" }],
+    "missing": [{ "documentType": "BRM_SSBT", "impact": "HIGH" }],
+    "additional": [{ "documentType": "YELLOW_FEVER", "documentName": "Yellow Fever Vaccination" }]
+  },
+  "expiryTimeline": [
+    { "documentType": "PEME", "daysUntilExpiry": 45, "urgency": "WARNING" }
+  ],
+  "flagSummary": {
+    "total": 3, "critical": 0, "high": 1, "medium": 2, "low": 0,
+    "items": [{ "severity": "HIGH", "message": "..." }]
+  },
+  "medicalStatus": {
+    "fitnessResult": "FIT",
+    "drugTestResult": "NEGATIVE",
+    "pemeExpiry": "2026-06-03",
+    "pemeExpired": false
+  },
+  "latestValidation": {
+    "validationId": "8c7be816-...",
+    "overallStatus": "CONDITIONAL",
+    "overallScore": 74,
+    "summary": "...",
+    "recommendations": ["..."],
+    "validatedAt": "2026-04-19T20:17:24.412Z"
+  },
+  "complianceReadiness": {
+    "status": "CONDITIONAL",
+    "score": 74,
+    "blockers": ["Missing required document: BRM_SSBT"],
+    "validated": true
+  }
+}
+```
+
+The report front-loads **blockers** (what stops deployment) and **actions** (from the latest validation recommendations). `complianceReadiness.validated` indicates whether an LLM validation has been run — if `false`, the status and score are estimated from document data alone.
+
+**Error `404`** — `SESSION_NOT_FOUND`
+
+```bash
+curl http://localhost:3000/api/sessions/b6a3fe00-37b6-483c-a111-3eacaa48c983/report
+```
 
 ## Database Schema
 

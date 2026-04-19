@@ -6,6 +6,8 @@ import { checkDbHealth } from "./db/connection";
 import { getLLMProvider } from "./llm";
 import { startWorker, checkQueueHealth } from "./queue/worker";
 import extractRouter from "./routes/extract";
+import jobsRouter from "./routes/jobs";
+import sessionsRouter from "./routes/sessions";
 import { errorHandler } from "./middleware/error-handler";
 
 const app = express();
@@ -45,6 +47,8 @@ app.get("/api/health", async (_req, res) => {
 
 // ── Routes ──────────────────────────────────────────────────
 app.use("/api/extract", extractRouter);
+app.use("/api/jobs", jobsRouter);
+app.use("/api/sessions", sessionsRouter);
 
 // ── Global error handler ────────────────────────────────────
 app.use(errorHandler);
