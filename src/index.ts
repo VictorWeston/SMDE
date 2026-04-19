@@ -4,6 +4,7 @@ dotenv.config();
 import express from "express";
 import { checkDbHealth } from "./db/connection";
 import { getLLMProvider } from "./llm";
+import { startWorker, checkQueueHealth } from "./queue/worker";
 import extractRouter from "./routes/extract";
 import { errorHandler } from "./middleware/error-handler";
 
@@ -25,7 +26,8 @@ app.get("/api/health", async (_req, res) => {
   }
 
   const dbOk = await checkDbHealth();
-  const allOk = dbOk && llmOk;
+  const queueOk = await checkQueueHealth();
+  const allOk = dbOk && llmOk && queueOk;
   const status = allOk ? "OK" : "DEGRADED";
 
   res.status(allOk ? 200 : 503).json({
@@ -35,7 +37,7 @@ app.get("/api/health", async (_req, res) => {
     dependencies: {
       database: dbOk ? "OK" : "UNAVAILABLE",
       llmProvider: llmOk ? "OK" : "UNAVAILABLE",
-      queue: "OK",
+      queue: queueOk ? "OK" : "UNAVAILABLE",
     },
     timestamp: new Date().toISOString(),
   });
@@ -49,4 +51,5 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  startWorker();
 });

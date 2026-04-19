@@ -9,7 +9,7 @@ const router = Router();
  * POST /api/extract
  *
  * Query params:
- *   mode = "sync" (default) | "async"
+ *   mode = "async" (default) | "sync"
  *
  * Body (multipart/form-data):
  *   document  - the file (jpeg, png, pdf — max 10MB)
@@ -37,9 +37,9 @@ router.post(
 
       const sessionId = req.body?.sessionId as string | undefined;
       const mode =
-        (req.query.mode as string)?.toLowerCase() === "async"
-          ? "async"
-          : "sync";
+        (req.query.mode as string)?.toLowerCase() === "sync"
+          ? "sync"
+          : "async";
 
       if (mode === "async") {
         const result = await createAsyncJob(

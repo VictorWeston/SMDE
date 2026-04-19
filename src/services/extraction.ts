@@ -8,6 +8,7 @@ import {
   EXTRACTION_PROMPT,
   PROMPT_VERSION,
 } from "../llm";
+import { extractionQueue, ExtractionJobData } from "../queue/worker";
 import { ExtractionResult } from "../types";
 
 // ============================================================
@@ -379,8 +380,19 @@ export async function createAsyncJob(
     [session.id, fileName, fileHash, mimeType, fileBuffer]
   );
 
+  const jobId: string = result.rows[0].id;
+
+  // Enqueue into BullMQ for worker processing
+  await extractionQueue.add("extract", {
+    jobId,
+    sessionId: session.id,
+    fileName,
+    fileHash,
+    mimeType,
+  } satisfies ExtractionJobData);
+
   return {
-    jobId: result.rows[0].id,
+    jobId,
     sessionId: session.id,
     deduplicated: false,
   };
