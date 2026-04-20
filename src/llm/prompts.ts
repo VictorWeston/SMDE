@@ -99,20 +99,20 @@ Required document matrix by role:
 - N/A or UNKNOWN: Use DECK requirements as the conservative baseline
 
 Overall status rules:
-- APPROVED: All required documents present, none expired, no CRITICAL flags, medical FIT, score >= 80
-- CONDITIONAL: Minor gaps exist (missing non-critical training certs, certs expiring within 90 days, MEDIUM flags) but core documents are present and valid. Score 50-79
-- REJECTED: Any required document expired, missing COC/SIRB/PASSPORT, medical UNFIT, positive drug test, CRITICAL identity inconsistency. Score < 50
+- APPROVED: All critical deployment documents are present and valid, no blocking medical issues, and score >= 75
+- CONDITIONAL: Some gaps exist (missing non-critical training certs, certs expiring within 90 days, HIGH/MEDIUM flags, or limited inconsistencies) but deployment may still be possible after review. Score 45-74
+- REJECTED: Critical deployment blockers remain (for example missing COC/SIRB/PASSPORT, expired critical documents, medical UNFIT, positive drug test, or severe identity inconsistency). Score < 45
 
 Scoring guidance:
 - Start at 100
-- Missing required document: -15 each
+- Missing required document: -10 each
 - Missing optional/training document: -5 each
-- Expired required document: -25 each
-- Expiring within 90 days: -5 each
-- CRITICAL flag: -20 each
-- HIGH flag: -10 each
-- MEDIUM flag: -5 each
-- Identity inconsistency: -15 per mismatch
+- Expired required document: -18 each
+- Expiring within 90 days: -4 each
+- CRITICAL flag: -15 each
+- HIGH flag: -7 each
+- MEDIUM flag: -3 each
+- Identity inconsistency: -10 per mismatch
 - Medical UNFIT or positive drug test: automatic 0
 
 Return ONLY a valid JSON object. No markdown. No code fences. No preamble.
@@ -169,6 +169,6 @@ Return ONLY a valid JSON object. No markdown. No code fences. No preamble.
   ]
 }`;
 
-export const VALIDATION_PROMPT_VERSION = "1.0.0";
+export const VALIDATION_PROMPT_VERSION = "1.1.0";
 
 export const PROMPT_VERSION = "1.0.0";

@@ -9,7 +9,19 @@ A production-oriented backend API that processes maritime seafarer certification
 - [Environment Variables](#environment-variables)
   - [Changing the LLM Provider](#changing-the-llm-provider)
 - [API Endpoints](#api-endpoints)
+  - [GET /api/health](#get-apihealth)
+  - [POST /api/extract](#post-apiextract)
+  - [GET /api/jobs/:jobId](#get-apijobsjobid)
+  - [POST /api/jobs/:jobId/retry](#post-apijobsjobidretry)
+  - [GET /api/sessions/:sessionId](#get-apisessionssessionid)
+  - [GET /api/sessions/:sessionId/expiring](#get-apisessionssessionidexpiringwithindays90)
+  - [POST /api/sessions/:sessionId/validate](#post-apisessionssessionidvalidate)
+  - [GET /api/sessions/:sessionId/report](#get-apisessionssessionidreport)
 - [Database Schema](#database-schema)
+  - [sessions](#sessions)
+  - [extractions](#extractions)
+  - [jobs](#jobs)
+  - [validations](#validations)
 - [Testing](#testing)
   - [Unit Tests](#unit-tests)
   - [Postman Collection](#postman-collection)
@@ -24,7 +36,7 @@ A production-oriented backend API that processes maritime seafarer certification
 
 ```bash
 cp .env.example .env          # configure your API key
-docker compose up -d           # start PostgreSQL
+docker compose up -d           # start PostgreSQL + Redis
 npm install && npm run dev     # start the server
 ```
 
@@ -365,7 +377,7 @@ Requires at least 2 completed documents in the session.
   ],
   "overallStatus": "CONDITIONAL",
   "overallScore": 74,
-  "promptVersion": "1.0.0",
+  "promptVersion": "1.1.0",
   "llmProvider": "gemini",
   "llmModel": "gemini-2.5-flash",
   "summary": "Seafarer is conditionally deployable...",
@@ -375,7 +387,7 @@ Requires at least 2 completed documents in the session.
 }
 ```
 
-**Scoring:** Starts at 100, deductions for missing/expired documents, flags, and identity mismatches. Medical UNFIT or positive drug test = automatic 0. Status thresholds: APPROVED >= 80, CONDITIONAL 50-79, REJECTED < 50.
+**Scoring:** Starts at 100, with softer deductions for missing/expired documents, flags, and identity mismatches so minor gaps do not over-penalize the seafarer. Medical UNFIT or positive drug test still results in automatic 0. Status thresholds: APPROVED >= 75, CONDITIONAL 45-74, REJECTED < 45.
 
 **Error responses:**
 
@@ -431,7 +443,7 @@ Structured compliance report derived entirely from database data — no LLM call
     "validationId": "8c7be816-...",
     "overallStatus": "CONDITIONAL",
     "overallScore": 74,
-    "promptVersion": "1.0.0",
+    "promptVersion": "1.1.0",
     "llmProvider": "gemini",
     "llmModel": "gemini-2.5-flash",
     "summary": "...",

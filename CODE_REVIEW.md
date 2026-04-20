@@ -174,7 +174,7 @@ const result = JSON.parse(response.content[0].text);
 
 ---
 
-## Teaching Moment: Why Prompt Engineering Is Engineering
+## Learning Note: Treat Prompt like a fucntion
 
 The biggest non-obvious issue in this PR is the vague prompt. It's tempting to think of the LLM call as a black box — send an image, get JSON back. But in practice, the prompt *is* your contract with the model. It's the equivalent of an API schema, a database migration, and a validation layer all in one.
 
@@ -185,9 +185,8 @@ A production extraction prompt should:
 3. **Set behavioral rules** — "return null, not empty string, for missing fields" / "never invent data"
 4. **Handle edge cases explicitly** — "if no document is detected, return documentType: OTHER with a CRITICAL flag"
 
-When I built our extraction prompt, the first version was similar to yours — short and vague. It worked on a specific test document but produced completely different output shapes on the next three. The final prompt is ~2,000 tokens and produces consistent, parseable output across every maritime document type we've tested. That consistency is what makes the entire downstream pipeline (validation, report, compliance checks) possible.
 
-The lesson: **treat your LLM prompt like code**. Version it, test it, review changes to it, and never assume the model will fill in ambiguity the way you expect.
+Keep in mind: **Think of prompts like functions but written in plain english**. Context is the params, prompt is logic. never assume the model will fill in ambiguity the way you expect.
 
 ---
 

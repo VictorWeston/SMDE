@@ -4,7 +4,9 @@
 
 ## Question 1 — Sync vs Async
 
-**Async should be the default mode.** Aysnc is default so `POST /api/extract` queues a job and returns `202 Accepted` unless the caller explicitly passes `?mode=sync`.
+### Short Answer
+
+Async should be the production default. I would force async for files larger than 5MB or when there are already more than 5 in-flight extractions.
 
 ### Why async by default
 
@@ -26,7 +28,10 @@ The sync mode still exists for callers who need it (internal tooling, single-doc
 
 ## Question 2 — Queue Choice
 
-I chose **BullMQ** backed by Redis. The mechanism matters less than the reasoning, so here's mine.
+### Short Answer
+
+I used BullMQ with Redis because it gives fast dispatch, retries, concurrency control, and crash recovery with minimal custom code. If throughput needed to reach 500 concurrent extractions per minute, I would keep BullMQ and scale horizontally with more workers and provider-aware throttling.
+
 
 ### Why BullMQ over the alternatives
 
@@ -71,6 +76,8 @@ The architecture wouldn't need to change — BullMQ's distributed workers model 
 ---
 
 ## Question 3 — LLM Provider Abstraction
+
+### Short Answer
 
 I built a provider abstraction, but I deliberately avoided the typical SDK-per-provider approach. Every vision-capable LLM API follows the same pattern: POST a JSON body with an image and a prompt to a URL, get text back. So I implemented a single `FetchLLMProvider` class driven by a config object per provider — no vendor SDKs, no npm dependencies, just `fetch`.
 
@@ -119,6 +126,10 @@ I chose `gemini-2.5-flash` as the default because it has a generous free tier wi
 ---
 
 ## Question 4 — Schema Design
+
+### Short Answer
+
+Storing dynamic fields only in JSONB/TEXT becomes expensive at scale because it weakens indexing, schema control, and query performance. I kept dynamic sections in JSONB, but promoted operationally important fields into typed columns so expiry, identity, compliance, and dedup queries remain cheap and explicit.
 
 The suggested schema stores `fields_json`, `validity_json`, `medical_data_json`, `flags_json`, and `compliance_json` as opaque TEXT columns. I changed them to JSONB and promoted every field I'd realistically query on into its own column.
 
@@ -176,29 +187,33 @@ I chose not to implement the child table now because the current query patterns 
 
 ## Question 5 — What You Skipped
 
-Here are the things I deliberately did not implement that a production deployment would require. Each was a conscious tradeoff — I chose to spend time on a robust core pipeline instead of spreading thin across features that can be layered on later.
+### Short Answer
+
+I deliberately skipped auth, full webhook redelivery infrastructure, long-term object storage/retention, observability, and multi-tenant encryption. Those all matter in production, but they were lower priority than getting the core extraction, validation, reporting, and async reliability paths right.
+
+### Detail
+
+Each omission was a conscious tradeoff — I chose depth on the core extraction, validation, and async reliability paths over breadth across features that can be layered on later.
 
 ### 1. Authentication and Authorization
 
-There is no auth layer at all. Every endpoint is publicly accessible. In production, this API would sit behind an API gateway or have JWT-based auth middleware that verifies the caller is a legitimate Manning Agent user. Role-based access control matters here too — a compliance officer should be able to view reports and trigger validations, but only an admin should be able to delete sessions or modify configuration. I skipped it because auth is largely orthogonal to the extraction pipeline — adding it later doesn't require restructuring any route logic, just wrapping routes in middleware. For an assessment focused on LLM reliability and async architecture, it was the right thing to cut.
+No auth layer exists; every endpoint is publicly accessible. In production this would be JWT middleware at the route level with role-based access. I skipped it because it's orthogonal to the extraction pipeline and can be added without restructuring any route logic.
 
-### 2. Fine-Grained Delivery Retry Strategy for Webhooks
+### 2. Fine-Grained Webhook Retry Infrastructure
 
-I implemented webhook delivery for async jobs (optional `webhookUrl` on extract, signed callback on `JOB_COMPLETED`/`JOB_FAILED`), but I deliberately did not implement a separate webhook dead-letter queue and delayed redelivery scheduler. Right now, webhook attempts are tracked (`webhook_attempts`, `webhook_last_error`, `webhook_delivered_at`) and failures are logged, but retries depend on the job lifecycle rather than a dedicated outbound delivery pipeline.
+I implemented webhook delivery with attempt tracking (`webhook_attempts`, `webhook_last_error`, `webhook_delivered_at`), but retries are tied to the job lifecycle rather than a dedicated outbound scheduler. In production I would split this into its own queue with exponential retry windows (1m → 5m → 30m → 2h), idempotency keys, and a dead-letter policy. I deprioritized it because the core delivery and signing logic is in place — the retry scheduling is an infrastructure extension, not an architectural one.
 
-In production I would split this into its own queue with exponential retry windows (e.g., 1m, 5m, 30m, 2h), idempotency keys, and a max-attempt policy before dead-lettering. I deprioritized that because it adds substantial system complexity and was not necessary to demonstrate core extraction correctness.
+### 3. File Storage
 
-### 3. File Storage and Cleanup
+Uploaded files are stored as `BYTEA` in the jobs table and cleared after the worker finishes. Nothing is persisted long-term. In production I would move files to object storage (S3/GCS/MinIO) and keep only a reference ID in the database. I skipped this because it's an infrastructure concern that doesn't affect the extraction logic under evaluation.
 
-Uploaded files are currently stored as `BYTEA` in the jobs table for async processing, then cleared after the worker finishes. The raw file bytes are not persisted anywhere long-term. In production, I would store originals in object storage (S3, GCS, or MinIO) with a reference in the database. This supports audit trails (regulators may require the original scan), re-extraction when prompts improve, and keeps the database lean. I also have no scheduled cleanup for old sessions, completed jobs, or orphaned files — a production system would need a retention policy (e.g., 90-day TTL on raw files, permanent retention on extracted data) enforced by a cron job or database-level partitioning. I skipped both because they're infrastructure concerns that don't affect the core extraction or validation logic being evaluated.
+### 4. Observability
 
-### 4. Comprehensive Error Recovery and Observability
+Error handling catches LLM failures and returns the right HTTP codes, but there's no structured logging, no metrics pipeline, and no circuit breaker. In production I would add OpenTelemetry traces, ship logs to a centralized system, and alert on queue depth and LLM error rate. Skipped because it doesn't demonstrate architectural judgment in an assessment context.
 
-The current error handling catches LLM failures and returns appropriate HTTP codes, but it doesn't do structured logging (just `console.error`), doesn't emit metrics (extraction latency P50/P95, LLM error rate, queue depth), and doesn't integrate with an alerting system. In production I would add OpenTelemetry traces through the full pipeline (upload → queue → LLM call → parse → store), ship logs to a centralized system (ELK or Datadog), and set up alerts on queue backup (> 100 pending jobs), LLM error rate (> 10% in 5 minutes), and extraction latency spikes. There's also no circuit breaker on the LLM provider — if Gemini starts returning 500s, we keep sending requests until max retries instead of failing fast. I skipped this because observability tooling is high-value in production but doesn't demonstrate architectural judgment in an assessment context.
+### 5. Multi-tenant Isolation and PII Encryption
 
-### 5. Multi-tenant Isolation and Data Encryption
-
-The system treats all data as belonging to a single implicit tenant. In production with multiple Manning Agencies, sessions need tenant scoping — every query would include a `tenant_id` filter, and cross-tenant data access must be impossible. PII fields (names, passport numbers, medical results) should be encrypted at rest using column-level encryption or a KMS-backed envelope encryption scheme. The current design stores them as plaintext in PostgreSQL. I skipped multi-tenancy because it's a horizontal concern that touches every query, and encryption because it requires key management infrastructure that would distract from the core pipeline implementation.
+The system has no tenant scoping and stores PII (names, passport numbers, medical results) as plaintext. In production every query would include a `tenant_id` filter and sensitive columns would use envelope encryption backed by a KMS. Skipped because both concerns are horizontal — they touch every query and every table — and implementing them correctly would have consumed more time than the core pipeline warranted.
 
 ---
 
@@ -227,3 +242,13 @@ I intentionally did not publish a provider benchmark in this iteration because I
 - normalized scoring criteria (field-level precision/recall, latency distribution, token cost per successful extraction).
 
 Right now, the sample size is too small and skewed toward synthetic/manual test cases, so any benchmark ranking would be noisy and potentially misleading.
+
+---
+
+## One Thing I Would Change With More Time
+
+**Move file storage out of PostgreSQL and into cloud object storage.**
+
+Right now, uploaded files are stored as `BYTEA` in the `jobs` table. It works, but it's the wrong tool for the job. Binary blobs inflate the database size, complicate backups, and make it hard to implement retention policies or re-extraction workflows when prompts improve.
+
+Given more time I would store files in S3, GCS, or Self Hosted FS on upload and save only the returned object key in the database. The jobs table would hold a `file_storage_key` column instead of `file_data BYTEA`. Benefits are immediate: the database stays lean and fast, files get their own lifecycle management (TTL policies, versioning, cross-region replication), and re-extraction becomes trivial — just fetch the key and re-send to the LLM. It also aligns with how every production document-processing system I've seen is actually built.
