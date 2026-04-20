@@ -2,6 +2,18 @@
 
 A production-oriented backend API that processes maritime seafarer certification documents through an LLM pipeline, extracting structured data and performing cross-document compliance validation.
 
+## Index
+
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+  - [Changing the LLM Provider](#changing-the-llm-provider)
+- [API Endpoints](#api-endpoints)
+- [Database Schema](#database-schema)
+- [Testing](#testing)
+  - [Unit Tests](#unit-tests)
+  - [Postman Collection](#postman-collection)
+
 ## Prerequisites
 
 - Node.js >= 18
@@ -22,7 +34,7 @@ See `.env.example` for all required variables.
 
 ### Changing the LLM Provider
 
-To switch LLM providers, update three environment variables in `.env` — no code changes required:
+To switch LLM providers, update these environment variables in `.env` — no code changes required:
 
 ```env
 # Gemini (default)
@@ -44,6 +56,17 @@ LLM_API_KEY=your_openai_key
 LLM_PROVIDER=groq
 LLM_MODEL=llama-3.2-11b-vision-preview
 LLM_API_KEY=your_groq_key
+
+# Optional: increase LLM request timeout for large documents
+# 30s proved too low for some real-world vision/document validations,
+# so timeout is now configurable via environment variable.
+# This timeout is shared by all LLM calls via the provider layer:
+# extraction, validation, repair prompts, and health checks.
+LLM_TIMEOUT_MS=90000
+
+# Optional: webhook signing + delivery timeout
+WEBHOOK_SECRET=your_hmac_secret
+WEBHOOK_TIMEOUT_MS=10000
 ```
 
 Restart the server after changing. The `/api/health` endpoint will confirm the new provider is connected.
@@ -85,6 +108,7 @@ Upload a maritime document for LLM-powered data extraction. Supports sync (defau
 |---|---|---|---|
 | `document` | File | Yes | JPEG, PNG, or PDF (max 10MB) |
 | `sessionId` | String | No | UUID to group documents. Auto-created if omitted. |
+| `webhookUrl` | String | No | Async mode only. Receives signed completion/failure event payload. |
 
 **Query params:**
 - `mode=sync` (default) — blocks until extraction completes, returns full result
@@ -116,9 +140,19 @@ Upload a maritime document for LLM-powered data extraction. Supports sync (defau
   "jobId": "10364003-...",
   "sessionId": "88b2dc6d-...",
   "status": "QUEUED",
-  "pollUrl": "/api/jobs/10364003-..."
+  "pollUrl": "/api/jobs/10364003-...",
+  "webhookConfigured": true
 }
 ```
+
+When `webhookUrl` is provided in async mode, SMDE sends an HMAC-signed POST on terminal job states:
+- `JOB_COMPLETED`
+- `JOB_FAILED`
+
+Webhook headers:
+- `X-SMDE-Event`
+- `X-SMDE-Timestamp`
+- `X-SMDE-Signature` (format: `sha256=<hex>`, only when `WEBHOOK_SECRET` is configured)
 
 **Deduplicated response `200 OK`** (same file + same session — skips LLM)
 ```
@@ -156,6 +190,12 @@ curl -X POST http://localhost:3000/api/extract \
 # Async mode
 curl -X POST "http://localhost:3000/api/extract?mode=async" \
   -F "document=@medical_cert.pdf;type=application/pdf"
+
+# Async mode with webhook callback
+curl -X POST "http://localhost:3000/api/extract?mode=async" \
+  -F "document=@medical_cert.pdf;type=application/pdf" \
+  -F "sessionId=a59002e4-5dc5-44b0-84d7-4185612f9d38" \
+  -F "webhookUrl=https://example.com/smde/webhooks"
 ```
 
 ---
@@ -193,6 +233,31 @@ Poll the status and result of an async extraction job.
 
 ```bash
 curl http://localhost:3000/api/jobs/5d427818-62af-4cdd-b884-27d4627c89d6
+```
+
+### `POST /api/jobs/:jobId/retry`
+
+Re-queue a failed async extraction job.
+
+Rules:
+- Job must exist
+- Job status must be `FAILED`
+- Job must be marked `retryable`
+- Original `file_data` must still exist
+
+**Response `202 Accepted`**
+```json
+{
+  "jobId": "5d427818-...",
+  "sessionId": "1670eb0d-...",
+  "status": "QUEUED",
+  "pollUrl": "/api/jobs/5d427818-...",
+  "message": "Job re-queued for retry"
+}
+```
+
+```bash
+curl -X POST http://localhost:3000/api/jobs/5d427818-62af-4cdd-b884-27d4627c89d6/retry
 ```
 
 ---
@@ -236,6 +301,38 @@ Returns all documents in a session with health status and pending jobs.
 curl http://localhost:3000/api/sessions/b6a3fe00-37b6-483c-a111-3eacaa48c983
 ```
 
+### `GET /api/sessions/:sessionId/expiring?withinDays=90`
+
+Returns expired or soon-to-expire documents in the session.
+
+**Query params:**
+- `withinDays` (optional, default `90`, range `1..3650`)
+
+**Response `200 OK`**
+```json
+{
+  "sessionId": "b6a3fe00-...",
+  "withinDays": 90,
+  "count": 2,
+  "documents": [
+    {
+      "extractionId": "069f0c19-...",
+      "fileName": "peme.jpg",
+      "documentType": "PEME",
+      "documentName": "Pre-Employment Medical Examination",
+      "dateOfExpiry": "2026-06-03",
+      "isExpired": false,
+      "daysUntilExpiry": 45,
+      "urgency": "WARNING"
+    }
+  ]
+}
+```
+
+```bash
+curl "http://localhost:3000/api/sessions/b6a3fe00-37b6-483c-a111-3eacaa48c983/expiring?withinDays=90"
+```
+
 ---
 
 ### `POST /api/sessions/:sessionId/validate`
@@ -268,6 +365,9 @@ Requires at least 2 completed documents in the session.
   ],
   "overallStatus": "CONDITIONAL",
   "overallScore": 74,
+  "promptVersion": "1.0.0",
+  "llmProvider": "gemini",
+  "llmModel": "gemini-2.5-flash",
   "summary": "Seafarer is conditionally deployable...",
   "recommendations": ["Renew PEME before deployment — expires in 45 days"],
   "processingTimeMs": 14079,
@@ -331,6 +431,9 @@ Structured compliance report derived entirely from database data — no LLM call
     "validationId": "8c7be816-...",
     "overallStatus": "CONDITIONAL",
     "overallScore": 74,
+    "promptVersion": "1.0.0",
+    "llmProvider": "gemini",
+    "llmModel": "gemini-2.5-flash",
     "summary": "...",
     "recommendations": ["..."],
     "validatedAt": "2026-04-19T20:17:24.412Z"
@@ -453,14 +556,17 @@ A full Postman collection is included at [`postman/SMDE-API.postman_collection.j
 | Health Check | GET | Status 200, `status: "OK"` |
 | Extract — Sync | POST | 200, has `extractionId`, status COMPLETE, has `data` |
 | Extract — Async | POST | 202, has `jobId` + `pollUrl`, status QUEUED |
+| Extract — Async Mode With Webhook | POST | 202, webhook configured = true |
 | Extract — Missing File | POST | 400, `MISSING_FILE` |
 | Poll Job Status | GET | 200, valid status enum |
+| Retry Failed Job | POST | 202, status QUEUED |
 | Poll Job — Not Found | GET | 404, `JOB_NOT_FOUND` |
 | Get Session | GET | 200, has documents array + health |
+| Get Expiring Documents | GET | 200, has count + documents array |
 | Get Session — Not Found | GET | 404, `SESSION_NOT_FOUND` |
 | Validate Session | POST | 200, has `overallStatus` + `overallScore` |
 | Validate — Insufficient | POST | 400, `INSUFFICIENT_DOCUMENTS` |
 | Get Compliance Report | GET | 200, full report shape |
 | Report — Not Found | GET | 404, `SESSION_NOT_FOUND` |
 
-Collection variables (`sessionId`, `jobId`, `extractionId`) are auto-populated from response data, so you can run requests in order without manual copy-paste.
+Collection variables (`sessionId`, `jobId`, `retryJobId`, `webhookUrl`, `extractionId`) are available; `sessionId`, `jobId`, and `extractionId` are auto-populated from response data.

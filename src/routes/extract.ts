@@ -14,6 +14,7 @@ const router = Router();
  * Body (multipart/form-data):
  *   document  - the file (jpeg, png, pdf — max 10MB)
  *   sessionId - optional UUID to group documents
+ *   webhookUrl - optional URL called when async job completes/fails
  */
 router.post(
   "/",
@@ -36,17 +37,34 @@ router.post(
       }
 
       const sessionId = req.body?.sessionId as string | undefined;
+      const webhookUrl = req.body?.webhookUrl as string | undefined;
       const mode =
         (req.query.mode as string)?.toLowerCase() === "sync"
           ? "sync"
           : "async";
+
+      if (mode === "async" && webhookUrl) {
+        try {
+          const parsed = new URL(webhookUrl);
+          if (!parsed.protocol.startsWith("http")) {
+            throw new Error("Webhook URL must use http or https");
+          }
+        } catch {
+          res.status(400).json({
+            error: "INVALID_WEBHOOK_URL",
+            message: "webhookUrl must be a valid http/https URL",
+          });
+          return;
+        }
+      }
 
       if (mode === "async") {
         const result = await createAsyncJob(
           req.file.buffer,
           req.file.originalname,
           req.file.mimetype,
-          sessionId
+          sessionId,
+          webhookUrl
         );
 
         if (result.deduplicated) {
@@ -64,6 +82,7 @@ router.post(
           sessionId: result.sessionId,
           status: "QUEUED",
           pollUrl: `/api/jobs/${result.jobId}`,
+          webhookConfigured: Boolean(webhookUrl),
         });
         return;
       }

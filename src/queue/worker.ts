@@ -11,6 +11,7 @@ import {
 } from "../llm";
 import { storeExtraction, storeFailedExtraction } from "../services/extraction";
 import { ExtractionResult } from "../types";
+import { sendJobWebhook, JobWebhookPayload } from "../services/webhook";
 
 // ============================================================
 // Redis connection
@@ -51,7 +52,44 @@ export interface ExtractionJobData {
   fileName: string;
   fileHash: string;
   mimeType: string;
+  webhookUrl?: string;
   // file_data stays in PG — we read it from there
+}
+
+async function attemptWebhook(jobId: string, payload: JobWebhookPayload): Promise<void> {
+  const webhookResult = await pool.query(
+    "SELECT webhook_url, webhook_attempts FROM jobs WHERE id = $1",
+    [jobId]
+  );
+
+  if (webhookResult.rows.length === 0) return;
+
+  const webhookUrl = webhookResult.rows[0].webhook_url as string | null;
+  const attempts = Number(webhookResult.rows[0].webhook_attempts ?? 0);
+
+  if (!webhookUrl) return;
+
+  try {
+    await sendJobWebhook(webhookUrl, payload);
+    await pool.query(
+      `UPDATE jobs
+       SET webhook_delivered_at = NOW(),
+           webhook_attempts = $1,
+           webhook_last_error = NULL
+       WHERE id = $2`,
+      [attempts + 1, jobId]
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    await pool.query(
+      `UPDATE jobs
+       SET webhook_attempts = $1,
+           webhook_last_error = $2
+       WHERE id = $3`,
+      [attempts + 1, message, jobId]
+    );
+    console.error(`Webhook delivery failed for job ${jobId}:`, message);
+  }
 }
 
 // ============================================================
@@ -156,6 +194,15 @@ export function startWorker(): Worker {
         [extractionId, jobId]
       );
 
+      await attemptWebhook(jobId, {
+        event: "JOB_COMPLETED",
+        jobId,
+        sessionId,
+        extractionId,
+        status: "COMPLETE",
+        timestamp: new Date().toISOString(),
+      });
+
       return { extractionId, processingTimeMs };
     },
     {
@@ -196,10 +243,23 @@ export function startWorker(): Worker {
         `UPDATE jobs
          SET status = 'FAILED', extraction_id = $1, completed_at = NOW(),
              error_code = $2, error_message = $3, retryable = TRUE,
-             retry_count = $4, file_data = NULL
+             retry_count = $4
          WHERE id = $5`,
         [extractionId, errorCode, err.message, job.attemptsMade, jobId]
       );
+
+      await attemptWebhook(jobId, {
+        event: "JOB_FAILED",
+        jobId,
+        sessionId,
+        extractionId,
+        status: "FAILED",
+        error: {
+          code: errorCode,
+          message: err.message,
+        },
+        timestamp: new Date().toISOString(),
+      });
     }
   });
 

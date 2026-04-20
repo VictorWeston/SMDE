@@ -8,7 +8,7 @@
 
 ### Why async by default
 
-LLM providers are fundamentally unreliable as a synchronous dependency. Even for a small JPEG under 100KB, the extraction call can take anywhere from 2 seconds to 30+ seconds depending on the model's current load, the provider's rate-limiting tier, and whether you're hitting a cold instance. I saw this first-hand during previous job — Gemini's free tier returns 429s unpredictably, and a single timed-out request holds an Express connection open for the full 30-second timeout window. In a sync-default system, a burst of 20 concurrent uploads during provider throttling would exhaust the connection pool and cascade into timeouts for every subsequent request, including health checks.
+LLM providers are fundamentally unreliable as a synchronous dependency. Even for a small JPEG under 100KB, the extraction call can take anywhere from 2 seconds to 30+ seconds depending on the model's current load, the provider's rate-limiting tier, and whether you're hitting a cold instance. I saw this first-hand during previous job — Gemini's free tier returns 429s unpredictably, and a single timed-out request holds an Express connection open for the full timeout window. In a sync-default system, a burst of 20 concurrent uploads during provider throttling would exhaust the connection pool and cascade into timeouts for every subsequent request, including health checks.
 
 Async-by-default decouples the HTTP request lifecycle from LLM latency entirely. The client gets a `jobId` and `pollUrl` within milliseconds, the file is persisted in the jobs table, and the worker processes it at its own pace with built-in retry logic. If the LLM provider goes down for 5 minutes, queued jobs simply wait — no client connections are held open, no timeouts cascade.
 
@@ -108,7 +108,9 @@ No code changes. No restarts beyond picking up the new env vars. Four major prov
 
 ### Why no vendor SDKs
 
-The junior engineer's PR in Part 3 imports `@anthropic-ai/sdk` directly — that's exactly what I wanted to avoid. Vendor SDKs add dependency weight, version management overhead, and API surface that mostly goes unused. For our use case (send an image, get text back), raw `fetch` with a 30-second `AbortController` timeout covers every provider identically. The entire LLM layer is one file with zero external dependencies.
+The junior engineer's PR in Part 3 imports `@anthropic-ai/sdk` directly — that's exactly what I wanted to avoid. Vendor SDKs add dependency weight, version management overhead, and API surface that mostly goes unused. For our use case (send an image, get text back), raw `fetch` with an `AbortController` timeout covers every provider identically, and timeout is configurable via `LLM_TIMEOUT_MS` for document-heavy workloads. The entire LLM layer is one file with zero external dependencies.
+
+I made timeout configurable (instead of fixed 30 seconds) because the same provider path is used by more than one endpoint and operation: document extraction (`/api/extract`), cross-document validation (`/api/sessions/:sessionId/validate`), repair prompts after parse failures, and LLM health checks. A single fixed timeout that fits one path poorly can cause avoidable failures in another. Centralizing timeout in `LLM_TIMEOUT_MS` gives us one operational control point to tune reliability without code changes.
 
 ### Why Gemini 2.5 Flash
 
@@ -180,9 +182,11 @@ Here are the things I deliberately did not implement that a production deploymen
 
 There is no auth layer at all. Every endpoint is publicly accessible. In production, this API would sit behind an API gateway or have JWT-based auth middleware that verifies the caller is a legitimate Manning Agent user. Role-based access control matters here too — a compliance officer should be able to view reports and trigger validations, but only an admin should be able to delete sessions or modify configuration. I skipped it because auth is largely orthogonal to the extraction pipeline — adding it later doesn't require restructuring any route logic, just wrapping routes in middleware. For an assessment focused on LLM reliability and async architecture, it was the right thing to cut.
 
-### 2. Webhook Notifications for Async Jobs
+### 2. Fine-Grained Delivery Retry Strategy for Webhooks
 
-The async flow currently requires polling (`GET /api/jobs/:jobId`). In production, callers should be able to supply a `webhookUrl` on the extract request and receive an HMAC-signed POST when the job completes or fails. This eliminates polling entirely and integrates cleanly with event-driven frontends or third-party systems. The implementation is straightforward — store the URL in the jobs table, fire the webhook from the BullMQ `completed`/`failed` event handlers, sign the payload with a shared secret, and implement retry with backoff for failed deliveries. I deprioritized it because the polling endpoint is functional and demonstrates the async pattern; webhooks are a delivery optimization, not a correctness concern.
+I implemented webhook delivery for async jobs (optional `webhookUrl` on extract, signed callback on `JOB_COMPLETED`/`JOB_FAILED`), but I deliberately did not implement a separate webhook dead-letter queue and delayed redelivery scheduler. Right now, webhook attempts are tracked (`webhook_attempts`, `webhook_last_error`, `webhook_delivered_at`) and failures are logged, but retries depend on the job lifecycle rather than a dedicated outbound delivery pipeline.
+
+In production I would split this into its own queue with exponential retry windows (e.g., 1m, 5m, 30m, 2h), idempotency keys, and a max-attempt policy before dead-lettering. I deprioritized that because it adds substantial system complexity and was not necessary to demonstrate core extraction correctness.
 
 ### 3. File Storage and Cleanup
 
@@ -195,3 +199,31 @@ The current error handling catches LLM failures and returns appropriate HTTP cod
 ### 5. Multi-tenant Isolation and Data Encryption
 
 The system treats all data as belonging to a single implicit tenant. In production with multiple Manning Agencies, sessions need tenant scoping — every query would include a `tenant_id` filter, and cross-tenant data access must be impossible. PII fields (names, passport numbers, medical results) should be encrypted at rest using column-level encryption or a KMS-backed envelope encryption scheme. The current design stores them as plaintext in PostgreSQL. I skipped multi-tenancy because it's a horizontal concern that touches every query, and encryption because it requires key management infrastructure that would distract from the core pipeline implementation.
+
+---
+
+## Phase 10 Addendum — Prompt Versioning and Benchmark Scope
+
+### Why prompt versioning matters in production
+
+I added explicit prompt version metadata to validation records (and extraction already stored prompt version). In production this matters for at least four reasons:
+
+1. **Token cost tracking by prompt generation.** Prompt edits change token footprint immediately. Version tags let me measure cost deltas per release and catch silent cost inflation.
+
+2. **Accuracy and speed differences across prompt versions.** A “better” prompt might improve extraction quality but increase latency, or vice versa. Versioned records make A/B analysis possible without guessing which prompt produced which result.
+
+3. **Model and requirement updates over time.** Providers change model behavior, and business requirements evolve (new compliance rules, new document types). Prompt versioning provides auditability: I can explain exactly why an output looked the way it did on a specific date.
+
+4. **Operational rollback and incident response.** If a prompt change causes regressions, versioning enables targeted rollback and bounded blast radius analysis (“all failures are from prompt v1.1.0”).
+
+5. **Regulatory and client audit trails.** In maritime compliance workflows, being able to trace result lineage (model + prompt version + timestamp) is valuable for defensibility.
+
+### Why provider benchmark is still skipped
+
+I intentionally did not publish a provider benchmark in this iteration because I don't have enough representative data yet. A credible benchmark needs:
+
+- a sufficiently large and diverse labeled corpus (multiple document types, quality levels, scan artifacts),
+- repeated runs to smooth provider variance and temporary rate-limit effects,
+- normalized scoring criteria (field-level precision/recall, latency distribution, token cost per successful extraction).
+
+Right now, the sample size is too small and skewed toward synthetic/manual test cases, so any benchmark ranking would be noisy and potentially misleading.

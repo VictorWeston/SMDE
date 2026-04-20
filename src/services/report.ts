@@ -129,7 +129,8 @@ export async function buildReport(sessionId: string) {
 
   // ── Latest validation (if any) ───────────────────────────
   const valResult = await pool.query(
-    `SELECT id, overall_status, overall_score, result_json, created_at
+    `SELECT id, overall_status, overall_score, result_json, created_at,
+            prompt_version, llm_provider, llm_model
      FROM validations
      WHERE session_id = $1
      ORDER BY created_at DESC
@@ -145,6 +146,9 @@ export async function buildReport(sessionId: string) {
       validationId: v.id,
       overallStatus: v.overall_status,
       overallScore: v.overall_score,
+      promptVersion: v.prompt_version,
+      llmProvider: v.llm_provider,
+      llmModel: v.llm_model,
       summary: full.summary ?? null,
       recommendations: full.recommendations ?? [],
       validatedAt: v.created_at,

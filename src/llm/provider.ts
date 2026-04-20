@@ -1,6 +1,6 @@
 import { LLMProvider, LLMResponse } from "../types";
 
-const LLM_TIMEOUT_MS = 30_000;
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? "90000");
 
 // ============================================================
 // Provider configs: URL pattern + payload builders per provider

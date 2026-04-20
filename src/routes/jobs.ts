@@ -1,7 +1,97 @@
 import { Router, Request, Response, NextFunction } from "express";
 import pool from "../db/connection";
+import { extractionQueue, ExtractionJobData } from "../queue/worker";
 
 const router = Router();
+
+/**
+ * POST /api/jobs/:jobId/retry
+ *
+ * Re-queue a FAILED job that is marked retryable.
+ */
+router.post(
+  "/:jobId/retry",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { jobId } = req.params;
+
+      const jobResult = await pool.query(
+        `SELECT id, session_id, file_name, file_hash, mime_type,
+                status, retryable, file_data, webhook_url
+         FROM jobs
+         WHERE id = $1`,
+        [jobId]
+      );
+
+      if (jobResult.rows.length === 0) {
+        res.status(404).json({
+          error: "JOB_NOT_FOUND",
+          message: `No job found with ID ${jobId}`,
+        });
+        return;
+      }
+
+      const job = jobResult.rows[0];
+
+      if (job.status !== "FAILED") {
+        res.status(409).json({
+          error: "JOB_NOT_FAILED",
+          message: `Only FAILED jobs can be retried. Current status: ${job.status}`,
+        });
+        return;
+      }
+
+      if (!job.retryable) {
+        res.status(409).json({
+          error: "JOB_NOT_RETRYABLE",
+          message: "This job is not marked retryable",
+        });
+        return;
+      }
+
+      if (!job.file_data) {
+        res.status(409).json({
+          error: "JOB_DATA_UNAVAILABLE",
+          message: "Original file data is unavailable for retry",
+        });
+        return;
+      }
+
+      await pool.query(
+        `UPDATE jobs
+         SET status = 'QUEUED',
+             extraction_id = NULL,
+             error_code = NULL,
+             error_message = NULL,
+             queued_at = NOW(),
+             started_at = NULL,
+             completed_at = NULL,
+             retry_count = 0
+         WHERE id = $1`,
+        [jobId]
+      );
+
+      await extractionQueue.add("extract", {
+        jobId: job.id,
+        sessionId: job.session_id,
+        fileName: job.file_name,
+        fileHash: job.file_hash,
+        mimeType: job.mime_type,
+        webhookUrl: job.webhook_url ?? undefined,
+      } satisfies ExtractionJobData);
+
+      res.status(202).json({
+        jobId: job.id,
+        sessionId: job.session_id,
+        status: "QUEUED",
+        pollUrl: `/api/jobs/${job.id}`,
+        message: "Job re-queued for retry",
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * GET /api/jobs/:jobId
@@ -143,6 +233,7 @@ function formatExtraction(row: Record<string, unknown>) {
     isExpired: row.is_expired,
     processingTimeMs: row.processing_time_ms,
     summary: row.summary,
+    promptVersion: row.prompt_version,
     createdAt: row.created_at,
   };
 }

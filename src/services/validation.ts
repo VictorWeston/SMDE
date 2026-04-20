@@ -39,6 +39,9 @@ export async function validateSession(sessionId: string): Promise<{
   validationId: string;
   result: ValidationResult;
   processingTimeMs: number;
+  promptVersion: string;
+  llmProvider: string;
+  llmModel: string;
 }> {
   const startTime = Date.now();
 
@@ -85,6 +88,8 @@ Today's date is ${new Date().toISOString().split("T")[0]}. Use this to calculate
 
   // Call LLM
   const provider = getLLMProvider();
+  const llmProvider = process.env.LLM_PROVIDER ?? provider.name;
+  const llmModel = process.env.LLM_MODEL ?? "unknown";
   let llmResponse;
   try {
     llmResponse = await provider.sendPrompt(fullPrompt);
@@ -113,8 +118,11 @@ Today's date is ${new Date().toISOString().split("T")[0]}. Use this to calculate
 
   // Store in DB
   const insertResult = await pool.query(
-    `INSERT INTO validations (session_id, overall_status, overall_score, result_json)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO validations (
+       session_id, overall_status, overall_score, result_json,
+       prompt_version, llm_provider, llm_model
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, created_at`,
     [
       sessionId,
@@ -126,7 +134,12 @@ Today's date is ${new Date().toISOString().split("T")[0]}. Use this to calculate
         promptVersion: VALIDATION_PROMPT_VERSION,
         processingTimeMs,
         llmUsage: llmResponse.usage,
+        llmProvider,
+        llmModel,
       }),
+      VALIDATION_PROMPT_VERSION,
+      llmProvider,
+      llmModel,
     ]
   );
 
@@ -134,5 +147,8 @@ Today's date is ${new Date().toISOString().split("T")[0]}. Use this to calculate
     validationId: insertResult.rows[0].id,
     result: parsed,
     processingTimeMs,
+    promptVersion: VALIDATION_PROMPT_VERSION,
+    llmProvider,
+    llmModel,
   };
 }

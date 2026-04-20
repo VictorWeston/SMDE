@@ -7,6 +7,86 @@ import { buildReport } from "../services/report";
 const router = Router();
 
 /**
+ * GET /api/sessions/:sessionId/expiring?withinDays=90
+ *
+ * Returns documents that are expired or expiring within N days.
+ */
+router.get(
+  "/:sessionId/expiring",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { sessionId } = req.params;
+      const withinDaysRaw = req.query.withinDays as string | undefined;
+      const withinDays = withinDaysRaw ? Number(withinDaysRaw) : 90;
+
+      if (!Number.isFinite(withinDays) || withinDays <= 0 || withinDays > 3650) {
+        res.status(400).json({
+          error: "INVALID_WITHIN_DAYS",
+          message: "withinDays must be a number between 1 and 3650",
+        });
+        return;
+      }
+
+      const sessionResult = await pool.query(
+        "SELECT id FROM sessions WHERE id = $1",
+        [sessionId]
+      );
+
+      if (sessionResult.rows.length === 0) {
+        res.status(404).json({
+          error: "SESSION_NOT_FOUND",
+          message: `No session found with ID ${sessionId}`,
+        });
+        return;
+      }
+
+      const expiringResult = await pool.query(
+        `SELECT id, file_name, document_type, document_name, date_of_expiry, is_expired
+         FROM extractions
+         WHERE session_id = $1
+           AND status = 'COMPLETE'
+           AND date_of_expiry IS NOT NULL
+           AND date_of_expiry <= (CURRENT_DATE + ($2::int * INTERVAL '1 day'))
+         ORDER BY date_of_expiry ASC`,
+        [sessionId, withinDays]
+      );
+
+      const now = new Date();
+      const documents = expiringResult.rows.map((row) => {
+        const expiry = new Date(row.date_of_expiry as string);
+        const daysUntilExpiry = Math.ceil(
+          (expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        let urgency = "OK";
+        if (daysUntilExpiry < 0) urgency = "EXPIRED";
+        else if (daysUntilExpiry <= 30) urgency = "CRITICAL";
+        else if (daysUntilExpiry <= 90) urgency = "WARNING";
+
+        return {
+          extractionId: row.id,
+          fileName: row.file_name,
+          documentType: row.document_type,
+          documentName: row.document_name,
+          dateOfExpiry: row.date_of_expiry,
+          isExpired: row.is_expired,
+          daysUntilExpiry,
+          urgency,
+        };
+      });
+
+      res.status(200).json({
+        sessionId,
+        withinDays,
+        count: documents.length,
+        documents,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * GET /api/sessions/:sessionId
  *
  * Returns a summary of all documents in the session, pending jobs,
@@ -212,13 +292,16 @@ router.post(
       }
 
       const sid = sessionId as string;
-      const { validationId, result, processingTimeMs } =
+      const { validationId, result, processingTimeMs, promptVersion, llmProvider, llmModel } =
         await validateSession(sid);
 
       res.status(200).json({
         sessionId: sid,
         validationId,
         ...result,
+        promptVersion,
+        llmProvider,
+        llmModel,
         processingTimeMs,
         validatedAt: new Date().toISOString(),
       });

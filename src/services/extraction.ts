@@ -352,7 +352,8 @@ export async function createAsyncJob(
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
-  sessionId?: string
+  sessionId?: string,
+  webhookUrl?: string
 ): Promise<{
   jobId: string;
   sessionId: string;
@@ -374,10 +375,10 @@ export async function createAsyncJob(
   }
 
   const result = await pool.query(
-    `INSERT INTO jobs (session_id, file_name, file_hash, mime_type, file_data)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO jobs (session_id, file_name, file_hash, mime_type, file_data, webhook_url)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
-    [session.id, fileName, fileHash, mimeType, fileBuffer]
+    [session.id, fileName, fileHash, mimeType, fileBuffer, webhookUrl ?? null]
   );
 
   const jobId: string = result.rows[0].id;
@@ -389,6 +390,7 @@ export async function createAsyncJob(
     fileName,
     fileHash,
     mimeType,
+    webhookUrl,
   } satisfies ExtractionJobData);
 
   return {

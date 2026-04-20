@@ -22,6 +22,16 @@
       "type": "string"
     },
     {
+      "key": "retryJobId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "webhookUrl",
+      "value": "https://example.com/smde/webhook",
+      "type": "string"
+    },
+    {
       "key": "extractionId",
       "value": "",
       "type": "string"
@@ -166,6 +176,65 @@
       ]
     },
     {
+      "name": "Extract — Async Mode With Webhook",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/extract?mode=async",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "extract"],
+          "query": [
+            {
+              "key": "mode",
+              "value": "async"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "document",
+              "type": "file",
+              "src": "",
+              "description": "Select a JPEG, PNG, or PDF maritime document (max 10 MB)"
+            },
+            {
+              "key": "sessionId",
+              "value": "{{sessionId}}",
+              "description": "Optional — re-use existing session",
+              "type": "text"
+            },
+            {
+              "key": "webhookUrl",
+              "value": "{{webhookUrl}}",
+              "description": "Optional callback URL for async completion/failure events",
+              "type": "text"
+            }
+          ]
+        },
+        "description": "Async extraction with webhook callback configuration."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202', () => pm.response.to.have.status(202));",
+              "const body = pm.response.json();",
+              "if (body.jobId) pm.collectionVariables.set('jobId', body.jobId);",
+              "if (body.sessionId) pm.collectionVariables.set('sessionId', body.sessionId);",
+              "pm.test('Has jobId', () => pm.expect(body.jobId).to.be.a('string'));",
+              "pm.test('Webhook is configured', () => pm.expect(body.webhookConfigured).to.eql(true));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
       "name": "Extract — Missing File (400)",
       "request": {
         "method": "POST",
@@ -232,6 +301,34 @@
       ]
     },
     {
+      "name": "Retry Failed Job",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/jobs/{{retryJobId}}/retry",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "jobs", "{{retryJobId}}", "retry"]
+        },
+        "description": "Re-queue a FAILED retryable job. Set retryJobId manually from a failed job."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202', () => pm.response.to.have.status(202));",
+              "const body = pm.response.json();",
+              "if (body.jobId) pm.collectionVariables.set('jobId', body.jobId);",
+              "pm.test('Job re-queued', () => pm.expect(body.status).to.eql('QUEUED'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
       "name": "Poll Job — Not Found (404)",
       "request": {
         "method": "GET",
@@ -285,6 +382,41 @@
               "pm.test('Has overallHealth', () => {",
               "  pm.expect(['OK','WARN','CRITICAL']).to.include(body.overallHealth);",
               "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Expiring Documents",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/expiring?withinDays=90",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "sessions", "{{sessionId}}", "expiring"],
+          "query": [
+            {
+              "key": "withinDays",
+              "value": "90"
+            }
+          ]
+        },
+        "description": "Returns expired or soon-to-expire documents for the session."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has sessionId', () => pm.expect(body.sessionId).to.be.a('string'));",
+              "pm.test('Has count', () => pm.expect(body.count).to.be.a('number'));",
+              "pm.test('Has documents array', () => pm.expect(body.documents).to.be.an('array'));"
             ],
             "type": "text/javascript"
           }
