@@ -197,7 +197,7 @@ Each omission was a conscious tradeoff — I chose depth on the core extraction,
 
 ### 1. Authentication and Authorization
 
-No auth layer exists; every endpoint is publicly accessible. In production this would be JWT middleware at the route level with role-based access. I skipped it because it's orthogonal to the extraction pipeline and can be added without restructuring any route logic.
+No auth layer exists; every endpoint is publicly accessible. In production this would be JWT middleware at the route level with role-based access. I skipped it because it can be added without restructuring any route logic.
 
 ### 2. Fine-Grained Webhook Retry Infrastructure
 

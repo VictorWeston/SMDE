@@ -83,7 +83,7 @@ export async function findDuplicate(
             summary, processing_time_ms, status, prompt_version,
             created_at
      FROM extractions
-     WHERE session_id = $1 AND file_hash = $2`,
+     WHERE session_id = $1 AND file_hash = $2 AND status = 'COMPLETE'`,
     [sessionId, fileHash]
   );
   return result.rows.length > 0 ? (result.rows[0] as ExistingExtraction) : null;
@@ -143,7 +143,41 @@ export async function storeExtraction(params: StoreParams): Promise<string> {
       $28, $29,
       $30, $31, $32,
       $33, $34, $35, $36, $37
-    ) RETURNING id`,
+    ) ON CONFLICT (session_id, file_hash) DO UPDATE SET
+      document_type = EXCLUDED.document_type,
+      document_name = EXCLUDED.document_name,
+      category = EXCLUDED.category,
+      applicable_role = EXCLUDED.applicable_role,
+      is_required = EXCLUDED.is_required,
+      confidence = EXCLUDED.confidence,
+      detection_reason = EXCLUDED.detection_reason,
+      holder_name = EXCLUDED.holder_name,
+      date_of_birth = EXCLUDED.date_of_birth,
+      nationality = EXCLUDED.nationality,
+      passport_number = EXCLUDED.passport_number,
+      sirb_number = EXCLUDED.sirb_number,
+      rank = EXCLUDED.rank,
+      date_of_issue = EXCLUDED.date_of_issue,
+      date_of_expiry = EXCLUDED.date_of_expiry,
+      is_expired = EXCLUDED.is_expired,
+      fitness_result = EXCLUDED.fitness_result,
+      drug_test_result = EXCLUDED.drug_test_result,
+      issuing_authority = EXCLUDED.issuing_authority,
+      regulation_reference = EXCLUDED.regulation_reference,
+      fields_json = EXCLUDED.fields_json,
+      validity_json = EXCLUDED.validity_json,
+      compliance_json = EXCLUDED.compliance_json,
+      medical_data_json = EXCLUDED.medical_data_json,
+      flags_json = EXCLUDED.flags_json,
+      summary = EXCLUDED.summary,
+      raw_llm_response = EXCLUDED.raw_llm_response,
+      processing_time_ms = EXCLUDED.processing_time_ms,
+      status = EXCLUDED.status,
+      error_code = EXCLUDED.error_code,
+      error_message = EXCLUDED.error_message,
+      retry_count = EXCLUDED.retry_count,
+      prompt_version = EXCLUDED.prompt_version
+    RETURNING id`,
     [
       sessionId, fileName, fileHash, mimeType,
       r.detection.documentType, r.detection.documentName,
@@ -192,6 +226,14 @@ export async function storeFailedExtraction(params: {
       raw_llm_response, processing_time_ms,
       status, error_code, error_message, retry_count, prompt_version
     ) VALUES ($1, $2, $3, $4, $5, $6, 'FAILED', $7, $8, $9, $10)
+    ON CONFLICT (session_id, file_hash) DO UPDATE SET
+      raw_llm_response = EXCLUDED.raw_llm_response,
+      processing_time_ms = EXCLUDED.processing_time_ms,
+      status = 'FAILED',
+      error_code = EXCLUDED.error_code,
+      error_message = EXCLUDED.error_message,
+      retry_count = EXCLUDED.retry_count,
+      prompt_version = EXCLUDED.prompt_version
     RETURNING id`,
     [
       p.sessionId, p.fileName, p.fileHash, p.mimeType,
